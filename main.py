@@ -3,44 +3,62 @@ import pandas as pd
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 import os
 import logging
-from uuid import uuid4
+import time
+import sys
+from dotenv import load_dotenv
 
-# Loglashni sozlash
-logging.basicConfig(filename='bot.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Load environment variables from .env file
+load_dotenv()
 
-TOKEN = '7110604770:AAEm7rtzfTlAexb55WdJE6S6OEtpC3VazXU'
+# Loglashni sozlash (Railway.app uchun stdout ga yo'naltirish)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('bot.log')  # Loglarni faylga ham yozish uchun
+    ]
+)
+
+# Get TOKEN from environment variables
+TOKEN = os.getenv('TOKEN')
+if not TOKEN:
+    logging.error("TOKEN environment variable not set")
+    raise ValueError("TOKEN environment variable not set")
+
+# Admin foydalanuvchilar ro'yxati (Telegram user ID)
+ADMINS = os.getenv('ADMINS', '').split(',')
+ADMINS = [int(admin_id) for admin_id in ADMINS if admin_id.strip().isdigit()]
+
 bot = telebot.TeleBot(TOKEN)
 
 EXCEL_FILE = 'products.xlsx'
 CSV_FILE = 'products.csv'
 
-SUCCESS_STICKER = 'CAACAgIAAxkBAAIBG2YJ5qGf...' 
-ERROR_STICKER = 'CAACAgIAAxkBAAIBH2YJ5qH...'  
+SUCCESS_STICKER = 'CAACAgIAAxkBAAIBG2YJ5qGf...'
+ERROR_STICKER = 'CAACAgIAAxkBAAIBH2YJ5qH...'
 
 # Foydalanuvchi tillarini saqlash uchun lug'at
 user_languages = {}
-# Foydalanuvchi holatini saqlash uchun lug'at (qaysi bo'limda ekanligi)
+# Foydalanuvchi holatini saqlash uchun lug'at
 user_state = {}
 
 # Excel yoki CSV faylni o'qish
 def read_excel():
     try:
-        # Agar CSV fayl mavjud bo'lsa, uni o'qish
         if os.path.exists(CSV_FILE):
             logging.info(f"{CSV_FILE} fayli topildi, o'qilmoqda...")
             df = pd.read_csv(CSV_FILE, encoding='utf-8')
             logging.info("CSV fayl muvaffaqiyatli o'qildi.")
-            print("Ustun nomlari (CSV):", df.columns.tolist())  # Debugging uchun
+            print("Ustun nomlari (CSV):", df.columns.tolist())
             return df
 
-        # Agar CSV fayl mavjud bo'lmasa, Excel faylini o'qib, CSV ga aylantirish
         if os.path.exists(EXCEL_FILE):
             logging.info(f"{EXCEL_FILE} fayli topildi, CSV ga aylantirilmoqda...")
             df = pd.read_excel(EXCEL_FILE)
-            # Excel faylini CSV ga saqlash
             df.to_csv(CSV_FILE, index=False, encoding='utf-8')
             logging.info(f"{EXCEL_FILE} fayli {CSV_FILE} ga aylantirildi.")
-            print("Ustun nomlari (Excel -> CSV):", df.columns.tolist())  # Debugging uchun
+            print("Ustun nomlari (Excel -> CSV):", df.columns.tolist())
             return df
         else:
             logging.error(f"{EXCEL_FILE} fayli topilmadi.")
@@ -90,7 +108,7 @@ def search_product_by_customer_code(code):
 
 # Foydalanuvchi tilini aniqlash
 def get_user_language(user_id):
-    return user_languages.get(user_id, 'uz')  # Default: O'zbek tili
+    return user_languages.get(user_id, 'uz')
 
 # Tugma matnlarini tilga qarab qaytarish
 def get_button_text(user_id, button_key):
@@ -103,10 +121,15 @@ def get_button_text(user_id, button_key):
         'russian': {'uz': "Русский 🇷🇺", 'ru': "Русский 🇷🇺"},
         'back': {'uz': "Orqaga qaytish 🔙", 'ru': "Вернуться назад 🔙"},
         'by_trek_code': {'uz': "Trek kodi orqali 🔍", 'ru': "По трек-коду 🔍"},
-        'by_customer_code': {'uz': "Mijoz kodi orqali 🔎", 'ru': "По коду клиента 🔎"}
+        'by_customer_code': {'uz': "Mijoz kodi orqali 🔎", 'ru': "По коду клиента 🔎"},
+        'admin_panel': {'uz': "Admin paneli ⚙️", 'ru': "Панель администратора ⚙️"}
     }
     lang = get_user_language(user_id)
     return buttons[button_key][lang]
+
+# Foydalanuvchi admin ekanligini tekshirish
+def is_admin(user_id):
+    return user_id in ADMINS
 
 # Asosiy menyuni yaratish
 def main_menu(user_id):
@@ -115,9 +138,11 @@ def main_menu(user_id):
     markup.add(KeyboardButton(get_button_text(user_id, 'feedback')))
     markup.add(KeyboardButton(get_button_text(user_id, 'contacts')))
     markup.add(KeyboardButton(get_button_text(user_id, 'language')))
+    if is_admin(user_id):
+        markup.add(KeyboardButton(get_button_text(user_id, 'admin_panel')))
     return markup
 
-# Yuk qidirish bo'limi uchun maxsus menyu (Orqaga qaytish tugmasi bilan)
+# Yuk qidirish bo'limi uchun maxsus menyu
 def search_menu(user_id):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(KeyboardButton(get_button_text(user_id, 'by_trek_code')))
@@ -131,9 +156,16 @@ def code_input_menu(user_id):
     markup.add(KeyboardButton(get_button_text(user_id, 'back')))
     return markup
 
-# Izoh qoldirish bo'limi uchun menyu (Orqaga qaytish tugmasi bilan)
+# Izoh qoldirish bo'limi uchun menyu
 def feedback_menu(user_id):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(KeyboardButton(get_button_text(user_id, 'back')))
+    return markup
+
+# Admin paneli menyusi
+def admin_menu(user_id):
+    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(KeyboardButton("Yangi database yuklash 📂"))
     markup.add(KeyboardButton(get_button_text(user_id, 'back')))
     return markup
 
@@ -141,7 +173,7 @@ def feedback_menu(user_id):
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = message.from_user.id
-    user_state[user_id] = 'main'  # Boshlang'ich holat
+    user_state[user_id] = 'main'
     lang = get_user_language(user_id)
     welcome_msg = {
         'uz': (
@@ -161,7 +193,7 @@ def send_welcome(message):
 def handle_feedback(message):
     user_id = message.from_user.id
     lang = get_user_language(user_id)
-    user_state[user_id] = 'feedback'  # Holatni "feedback" ga o'zgartirish
+    user_state[user_id] = 'feedback'
     prompt_msg = {'uz': "Iltimos, izohingizni yozing:", 'ru': "Пожалуйста, напишите ваш отзыв:"}
     bot.reply_to(message, prompt_msg[lang], reply_markup=feedback_menu(user_id))
     bot.register_next_step_handler(message, save_feedback)
@@ -171,7 +203,6 @@ def save_feedback(message):
     lang = get_user_language(user_id)
     feedback = message.text
     
-    # Agar "Orqaga qaytish" tugmasi bosilgan bo'lsa
     if feedback == get_button_text(user_id, 'back'):
         user_state[user_id] = 'main'
         back_msg = {'uz': "Asosiy menyuga qaytdingiz.", 'ru': "Вы вернулись в главное меню."}
@@ -182,7 +213,7 @@ def save_feedback(message):
         f.write(f"{user_id}: {feedback}\n")
     success_msg = {'uz': "Rahmat! Izohingiz qabul qilindi. ✅", 'ru': "Спасибо! Ваш отзыв принят. ✅"}
     bot.reply_to(message, success_msg[lang], reply_markup=main_menu(user_id))
-    user_state[user_id] = 'main'  # Holatni asosiy menyuga qaytarish
+    user_state[user_id] = 'main'
 
 # Manzil va kontaktlar funksiyasi
 def show_contacts(message):
@@ -190,7 +221,7 @@ def show_contacts(message):
     lang = get_user_language(user_id)
     contact_info = {
         'uz': (
-            "📍 Manzil:  Toshkent sh., Chilanzar tumani, Arnasoy 5A\n"
+            "📍 Manzil: Toshkent sh., Chilanzar tumani, Arnasoy 5A\n"
             "📞 Telefon: +998 99-981-22-72\n"
             "📩 Telegram: @jetcargoo\n"
             "📷 Instagram: https://www.instagram.com/jetcargoo"
@@ -198,8 +229,8 @@ def show_contacts(message):
         'ru': (
             "📍 Адрес: г. Ташкент, Чиланзарский район, Арнасай 5А\n"
             "📞 Телефон: +998 99-981-22-72\n"
-            "📩 телеграм: @jetcargoo\n"
-            "📷 Инстаграм: https://www.instagram.com/jetcargoo"
+            "📩 Telegram: @jetcargoo\n"
+            "📷 Instagram: https://www.instagram.com/jetcargoo"
         )
     }
     bot.reply_to(message, contact_info[lang], reply_markup=main_menu(user_id))
@@ -235,7 +266,123 @@ def set_language(message):
         return
     bot.reply_to(message, success_msg[lang], reply_markup=main_menu(user_id))
 
-# Yuk qidirish turini tanlash (Trek kodi yoki Mijoz kodi)
+# Admin paneli funksiyasi
+def handle_admin_panel(message):
+    user_id = message.from_user.id
+    lang = get_user_language(user_id)
+    if not is_admin(user_id):
+        error_msg = {
+            'uz': "Sizda admin huquqlari yo'q.",
+            'ru': "У вас нет прав администратора."
+        }
+        bot.reply_to(message, error_msg[lang], reply_markup=main_menu(user_id))
+        return
+    
+    user_state[user_id] = 'admin_panel'
+    prompt_msg = {
+        'uz': "Admin paneliga xush kelibsiz! Quyidagi amallardan birini tanlang:",
+        'ru': "Добро пожаловать в панель администратора! Выберите одно из действий:"
+    }
+    bot.reply_to(message, prompt_msg[lang], reply_markup=admin_menu(user_id))
+    bot.register_next_step_handler(message, process_admin_action)
+
+# Admin harakatlarini qayta ishlash
+def process_admin_action(message):
+    user_id = message.from_user.id
+    lang = get_user_language(user_id)
+    action = message.text
+    
+    if action == get_button_text(user_id, 'back'):
+        user_state[user_id] = 'main'
+        back_msg = {'uz': "Asosiy menyuga qaytdingiz.", 'ru': "Вы вернулись в главное меню."}
+        bot.reply_to(message, back_msg[lang], reply_markup=main_menu(user_id))
+        return
+    
+    if action == "Yangi database yuklash 📂":
+        prompt_msg = {
+            'uz': "Iltimos, yangi database faylini (.xlsx yoki .csv) yuboring:",
+            'ru': "Пожалуйста, отправьте новый файл базы данных (.xlsx или .csv):"
+        }
+        bot.reply_to(message, prompt_msg[lang], reply_markup=code_input_menu(user_id))
+        bot.register_next_step_handler(message, handle_database_upload)
+    else:
+        error_msg = {
+            'uz': "Noto'g'ri buyruq. Iltimos, quyidagi tugmalardan birini tanlang:",
+            'ru': "Неверная команда. Пожалуйста, выберите одну из кнопок ниже:"
+        }
+        bot.reply_to(message, error_msg[lang], reply_markup=admin_menu(user_id))
+        bot.register_next_step_handler(message, process_admin_action)
+
+# Yangi database faylini yuklash
+@bot.message_handler(content_types=['document'])
+def handle_database_upload(message):
+    user_id = message.from_user.id
+    lang = get_user_language(user_id)
+    
+    if not is_admin(user_id):
+        error_msg = {
+            'uz': "Sizda fayl yuklash huquqi yo'q.",
+            'ru': "У вас нет прав для загрузки файла."
+        }
+        bot.reply_to(message, error_msg[lang], reply_markup=main_menu(user_id))
+        return
+    
+    if user_state.get(user_id) != 'admin_panel':
+        error_msg = {
+            'uz': "Fayl yuklash uchun avval admin paneliga kiring.",
+            'ru': "Для загрузки файла сначала войдите в панель администратора."
+        }
+        bot.reply_to(message, error_msg[lang], reply_markup=main_menu(user_id))
+        return
+    
+    try:
+        file_info = bot.get_file(message.document.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        file_name = message.document.file_name
+        
+        if not file_name.endswith(('.xlsx', '.csv')):
+            error_msg = {
+                'uz': "Faqat .xlsx yoki .csv fayllarni yuklash mumkin.",
+                'ru': "Можно загружать только файлы .xlsx или .csv."
+            }
+            bot.reply_to(message, error_msg[lang], reply_markup=admin_menu(user_id))
+            bot.register_next_step_handler(message, process_admin_action)
+            return
+        
+        if os.path.exists(CSV_FILE):
+            os.remove(CSV_FILE)
+            logging.info(f"Eski {CSV_FILE} fayli o'chirildi.")
+        
+        if file_name.endswith('.xlsx'):
+            temp_excel = 'temp_products.xlsx'
+            with open(temp_excel, 'wb') as new_file:
+                new_file.write(downloaded_file)
+            df = pd.read_excel(temp_excel)
+            df.to_csv(CSV_FILE, index=False, encoding='utf-8')
+            os.remove(temp_excel)
+            logging.info(f"Yangi .xlsx fayli {CSV_FILE} ga aylantirildi va saqlandi.")
+        else:
+            with open(CSV_FILE, 'wb') as new_file:
+                new_file.write(downloaded_file)
+            logging.info(f"Yangi .csv fayli {CSV_FILE} sifatida saqlandi.")
+        
+        success_msg = {
+            'uz': "✅ Yangi database muvaffaqiyatli yuklandi va saqlandi!",
+            'ru': "✅ Новая база данных успешно загружена и сохранена!"
+        }
+        bot.reply_to(message, success_msg[lang], reply_markup=admin_menu(user_id))
+        bot.register_next_step_handler(message, process_admin_action)
+    
+    except Exception as e:
+        logging.error(f"Faylni yuklashda xatolik: {str(e)}")
+        error_msg = {
+            'uz': f"Faylni yuklashda xato yuz berdi: {str(e)}",
+            'ru': f"Ошибка при загрузке файла: {str(e)}"
+        }
+        bot.reply_to(message, error_msg[lang], reply_markup=admin_menu(user_id))
+        bot.register_next_step_handler(message, process_admin_action)
+
+# Yuk qidirish turini tanlash
 def select_search_type(message):
     user_id = message.from_user.id
     lang = get_user_language(user_id)
@@ -252,14 +399,12 @@ def search_by_trek_code(message):
     lang = get_user_language(user_id)
     codes_input = message.text.strip()
     
-    # Agar "Orqaga qaytish" tugmasi bosilgan bo'lsa
     if codes_input == get_button_text(user_id, 'back'):
         user_state[user_id] = 'select_search_type'
         back_msg = {'uz': "Qidirish turini tanlashga qaytdingiz.", 'ru': "Вы вернулись к выбору типа поиска."}
         bot.reply_to(message, back_msg[lang], reply_markup=search_menu(user_id))
         return
     
-    # Trek kodlarni bo'shliq yoki vergul bilan ajratish
     codes = [code.strip() for code in codes_input.replace(',', ' ').split() if code.strip()]
     
     if not codes:
@@ -274,7 +419,6 @@ def search_by_trek_code(message):
     response = ""
     found_any = False
     
-    # Har bir trek kodni tekshirish
     for code in codes:
         results = search_product_by_trek_code(code)
         if results:
@@ -308,16 +452,21 @@ def search_by_trek_code(message):
             }
             response += error_msg[lang]
     
-    # Natijani yuborish
-    bot.reply_to(message, response.strip())
+    try:
+        bot.reply_to(message, response.strip())
+        time.sleep(0.5)
+        if found_any:
+            bot.send_sticker(message.chat.id, SUCCESS_STICKER)
+        else:
+            bot.send_sticker(message.chat.id, ERROR_STICKER)
+    except telebot.apihelper.ApiTelegramException as e:
+        logging.error(f"Xabar yuborishda xato: {str(e)}")
+        error_msg = {
+            'uz': "Xabar yuborishda xato yuz berdi. Iltimos, keyinroq qayta urinib ko'ring.",
+            'ru': "Ошибка при отправке сообщения. Пожалуйста, попробуйте снова позже."
+        }
+        bot.reply_to(message, error_msg[lang])
     
-    # Stiker yuborish
-    if found_any:
-        bot.send_sticker(message.chat.id, SUCCESS_STICKER)
-    else:
-        bot.send_sticker(message.chat.id, ERROR_STICKER)
-    
-    # Yana trek kod kiritishni kutish
     bot.register_next_step_handler(message, search_by_trek_code)
 
 # Mijoz kodi bo'yicha qidirish
@@ -326,7 +475,6 @@ def search_by_customer_code(message):
     lang = get_user_language(user_id)
     code = message.text.strip()
     
-    # Agar "Orqaga qaytish" tugmasi bosilgan bo'lsa
     if code == get_button_text(user_id, 'back'):
         user_state[user_id] = 'select_search_type'
         back_msg = {'uz': "Qidirish turini tanlashga qaytdingiz.", 'ru': "Вы вернулись к выбору типа поиска."}
@@ -348,10 +496,21 @@ def search_by_customer_code(message):
     
     if results:
         found_any = True
-        response += {
-            'uz': f"\n📋 Mijoz kodi: {code} bo'yicha barcha yuklar ro'yxati:\n\n",
-            'ru': f"\n📋 Список всех грузов по коду клиента: {code}:\n\n"
-        }[lang]
+        header_msg = {
+            'uz': f"📋 Mijoz kodi: {code} bo'yicha barcha yuklar ro'yxati:",
+            'ru': f"📋 Список всех грузов по коду клиента: {code}:"
+        }
+        try:
+            bot.reply_to(message, header_msg[lang])
+            time.sleep(0.5)
+        except telebot.apihelper.ApiTelegramException as e:
+            logging.error(f"Xabar yuborishda xato: {str(e)}")
+            error_msg = {
+                'uz': "Xabar yuborishda xato yuz berdi. Iltimos, keyinroq qayta urinib ko'ring.",
+                'ru': "Ошибка при отправке сообщения. Пожалуйста, попробуйте снова позже."
+            }
+            bot.reply_to(message, error_msg[lang])
+            return
         
         for idx, item in enumerate(results, 1):
             result_msg = {
@@ -364,7 +523,7 @@ def search_by_customer_code(message):
                     f"🔢 Miqdor: {item['Quantity']}\n"
                     f"✈️ Parvoz: {item['Flight']}\n"
                     f"👤 Mijoz kodi: {item['Customer code']}\n"
-                    f"{'-'*30}\n"
+                    f"{'-'*30}"
                 ),
                 'ru': (
                     f"📦 Груз #{idx}\n"
@@ -375,27 +534,44 @@ def search_by_customer_code(message):
                     f"🔢 Количество: {item['Quantity']}\n"
                     f"✈️ Рейс: {item['Flight']}\n"
                     f"👤 Код клиента: {item['Customer code']}\n"
-                    f"{'-'*30}\n"
+                    f"{'-'*30}"
                 )
             }
-            response += result_msg[lang]
+            try:
+                bot.reply_to(message, result_msg[lang])
+                time.sleep(0.5)
+            except telebot.apihelper.ApiTelegramException as e:
+                logging.error(f"Yuk #{idx} xabarini yuborishda xato: {str(e)}")
+                error_msg = {
+                    'uz': f"Yuk #{idx} ma'lumotini yuborishda xato yuz berdi.",
+                    'ru': f"Ошибка при отправке информации о грузе #{idx}."
+                }
+                bot.reply_to(message, error_msg[lang])
     else:
         error_msg = {
-            'uz': f"❌ {code} mijoz kodiga mos yuk topilmadi.\n",
-            'ru': f"❌ Груз с кодом клиента {code} не найден.\n"
+            'uz': f"❌ {code} mijoz kodiga mos yuk topilmadi.",
+            'ru': f"❌ Груз с кодом клиента {code} не найден."
         }
-        response += error_msg[lang]
+        try:
+            bot.reply_to(message, error_msg[lang])
+            time.sleep(0.5)
+        except telebot.apihelper.ApiTelegramException as e:
+            logging.error(f"Xabar yuborishda xato: {str(e)}")
+            error_msg = {
+                'uz': "Xabar yuborishda xato yuz berdi. Iltimos, keyinroq qayta urinib ko'ring.",
+                'ru': "Ошибка при отправке сообщения. Пожалуйста, попробуйте снова позже."
+            }
+            bot.reply_to(message, error_msg[lang])
     
-    # Natijani yuborish
-    bot.reply_to(message, response.strip())
+    try:
+        time.sleep(0.5)
+        if found_any:
+            bot.send_sticker(message.chat.id, SUCCESS_STICKER)
+        else:
+            bot.send_sticker(message.chat.id, ERROR_STICKER)
+    except telebot.apihelper.ApiTelegramException as e:
+        logging.error(f"Stiker yuborishda xato: {str(e)}")
     
-    # Stiker yuborish
-    if found_any:
-        bot.send_sticker(message.chat.id, SUCCESS_STICKER)
-    else:
-        bot.send_sticker(message.chat.id, ERROR_STICKER)
-    
-    # Yana mijoz kod kiritishni kutish
     bot.register_next_step_handler(message, search_by_customer_code)
 
 # Xabar ishlovchisi
@@ -407,40 +583,37 @@ def handle_message(message):
     feedback_text = get_button_text(user_id, 'feedback')
     contacts_text = get_button_text(user_id, 'contacts')
     language_text = get_button_text(user_id, 'language')
+    admin_panel_text = get_button_text(user_id, 'admin_panel')
     by_trek_code_text = get_button_text(user_id, 'by_trek_code')
     by_customer_code_text = get_button_text(user_id, 'by_customer_code')
     back_text = get_button_text(user_id, 'back')
 
-    # Agar foydalanuvchi trek kodi bo'yicha qidirish bo'limida bo'lsa
     if user_state.get(user_id) == 'search_by_trek_code':
         search_by_trek_code(message)
         return
     
-    # Agar foydalanuvchi mijoz kodi bo'yicha qidirish bo'limida bo'lsa
     if user_state.get(user_id) == 'search_by_customer_code':
         search_by_customer_code(message)
         return
     
-    # Agar foydalanuvchi izoh qoldirish bo'limida bo'lsa
     if user_state.get(user_id) == 'feedback':
         save_feedback(message)
         return
     
-    # Agar foydalanuvchi qidirish turini tanlash bo'limida bo'lsa
     if user_state.get(user_id) == 'select_search_type':
         if message.text == by_trek_code_text:
             user_state[user_id] = 'search_by_trek_code'
             prompt_msg = {
-                'uz': "Trek kodni kiriting :",
-                'ru': "Введите трек-код :"
+                'uz': "Trek kodni kiriting:",
+                'ru': "Введите трек-код:"
             }
             bot.reply_to(message, prompt_msg[lang], reply_markup=code_input_menu(user_id))
             bot.register_next_step_handler(message, search_by_trek_code)
         elif message.text == by_customer_code_text:
             user_state[user_id] = 'search_by_customer_code'
             prompt_msg = {
-                'uz': "Mijoz kodini kiriting :",
-                'ru': "Введите код клиента :"
+                'uz': "Mijoz kodini kiriting:",
+                'ru': "Введите код клиента:"
             }
             bot.reply_to(message, prompt_msg[lang], reply_markup=code_input_menu(user_id))
             bot.register_next_step_handler(message, search_by_customer_code)
@@ -448,6 +621,10 @@ def handle_message(message):
             user_state[user_id] = 'main'
             back_msg = {'uz': "Asosiy menyuga qaytdingiz.", 'ru': "Вы вернулись в главное меню."}
             bot.reply_to(message, back_msg[lang], reply_markup=main_menu(user_id))
+        return
+    
+    if user_state.get(user_id) == 'admin_panel':
+        process_admin_action(message)
         return
 
     if message.text == search_text:
@@ -458,8 +635,13 @@ def handle_message(message):
         show_contacts(message)
     elif message.text == language_text:
         select_language(message)
+    elif message.text == admin_panel_text and is_admin(user_id):
+        handle_admin_panel(message)
     else:
-        error_msg = {'uz': "Iltimos, quyidagi tugmalardan birini tanlang:", 'ru': "Пожалуйста, выберите одну из кнопок ниже:"}
+        error_msg = {
+            'uz': "Iltimos, quyidagi tugmalardan birini tanlang:",
+            'ru': "Пожалуйста, выберите одну из кнопок ниже:"
+        }
         bot.reply_to(message, error_msg[lang], reply_markup=main_menu(user_id))
 
 # Botni ishga tushirish
@@ -469,6 +651,5 @@ if __name__ == "__main__":
     except Exception as e:
         logging.error(f"Bot pollingda xatolik: {str(e)}")
         print(f"Xatolik yuz berdi: {e}")
-        import time
         time.sleep(5)
         bot.polling(none_stop=True)
